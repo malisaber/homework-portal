@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Homework Portal</title>
+<style>
+:root{--bg:#f6f7f9;--fg:#1c1f26;--muted:#6b7280;--card:#fff;--line:#e3e6eb;--accent:#4f46e5;--bad:#b42318;--ok:#067647}
+@media(prefers-color-scheme:dark){:root{--bg:#14161a;--fg:#eceef2;--muted:#9aa1ae;--card:#1d2026;--line:#2d313a;--accent:#8b85ff;--bad:#ff8a80;--ok:#5ad19a}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+header{display:flex;justify-content:space-between;align-items:center;padding:14px 24px;background:var(--card);border-bottom:1px solid var(--line)}
+header a{color:var(--fg);text-decoration:none;font-weight:600}
+main{max-width:980px;margin:0 auto;padding:24px}
+h1{font-size:1.8rem;margin:.4em 0}
+nav{display:flex;gap:16px;align-items:center}
+.muted{color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:18px}
+.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;text-decoration:none;color:inherit;padding:0 0 14px}
+.card:hover{border-color:var(--c)}
+.card .band{height:90px;background:var(--c)}
+.card h3,.card p,.card small{margin:10px 16px 0}
+.card p{color:var(--muted);font-size:.92rem}
+.card small{display:block;color:var(--muted)}
+.slot,.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin:14px 0}
+.slot h3,.panel h3{margin:0 0 4px}
+.top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.pill{font-size:.8rem;border:1px solid var(--line);border-radius:99px;padding:2px 10px;white-space:nowrap}
+.pill.late{color:var(--bad);border-color:var(--bad)}
+form{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.panel form,form.panel{flex-direction:column;align-items:stretch;max-width:420px}
+input,button,.btn{font:inherit;padding:8px 12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+button,.btn{background:var(--accent);color:#fff;border:0;cursor:pointer;text-decoration:none;display:inline-block}
+button:disabled{opacity:.5}
+button.link{background:none;color:var(--accent);padding:2px 6px}
+.btn.ghost{background:none;color:var(--accent);border:1px solid var(--line)}
+input:focus-visible,button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.msg{min-height:1.4em;margin:8px 0 0;font-size:.92rem}
+.err{color:var(--bad)}
+.list{list-style:none;padding:0}
+.list li,.subList li{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+.subList{list-style:none;padding:0;margin:8px 0 0;font-size:.9rem}
+.row{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.center{text-align:center;max-width:480px;margin:40px auto}
+</style>
+</head>
+<body>
+<header><a href="#/">Homework Portal</a><nav><span id="who" class="muted"></span><a href="#/admin">Admin</a></nav></header>
+<main id="app">Loading…</main>
+<script>
+const app = document.getElementById('app');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(url, { method = 'GET', body } = {}) {
+  const o = { method };
+  if (body instanceof FormData) o.body = body;
+  else if (body) { o.headers = { 'Content-Type': 'application/json' }; o.body = JSON.stringify(body); }
+  const r = await fetch('/api' + url, o);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'Something went wrong.');
+  return d;
+}
+let me = null, student = null;
+
+async function route() {
+  try {
+    const m = await api('/me'); me = m.admin; student = m.student;
+    document.getElementById('who').innerHTML = student ? `${esc(student.name)} <a href="/auth/logout">Sign out</a>` : '';
+    const h = location.hash.slice(1) || '/';
+    if (h === '/admin') await adminPage();
+    else if (h.startsWith('/course/')) await coursePage(h.split('/')[2]);
+    else await home();
+  } catch (e) { app.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+addEventListener('hashchange', route);
+
+async function home() {
+  const cs = await api('/courses');
+  app.innerHTML = '<h1>Courses</h1>' + (cs.length
+    ? `<div class="grid">${cs.map(c => `<a class="card" href="#/course/${c.id}" style="--c:${esc(c.color)}"><div class="band"></div><h3>${esc(c.title)}</h3><p>${esc(c.description)}</p><small>${c.hw_count} assignment${c.hw_count == 1 ? '' : 's'}</small></a>`).join('')}</div>`
+    : '<p class="muted">No courses yet. An admin can add one from the Admin page.</p>');
+}
+
+const slot = (h, manage) => {
+  const closed = h.deadline && new Date(h.deadline) < new Date();
+  return `<section class="slot" data-id="${h.id}">
+    <div class="top"><div><h3>${esc(h.title)}</h3><div class="muted">${esc(h.description)}</div></div>
+    ${h.deadline ? `<span class="pill ${closed ? 'late' : ''}">${closed ? 'Closed' : 'Due'} ${new Date(h.deadline).toLocaleString()}</span>` : ''}</div>
+    ${closed ? '' : student ? `<form class="up" style="margin-top:12px"><input type="file" name="file" required><button>Upload as ${esc(student.name)}</button></form>` : `<a class="btn" href="/auth/student?course=${esc(location.hash.split('/')[2] || '')}">Sign in with Google to upload</a>`}
+    <p class="msg"></p>
+    ${manage ? `<div class="row"><button class="link subs">View submissions</button><a class="btn ghost" href="/api/homework/${h.id}/download">Download all</a><button class="link delhw">Delete</button></div><ul class="subList"></ul>` : ''}
+  </section>`;
+};
+
+async function coursePage(id) {
+  const { course: c, homework: hw } = await api('/courses/' + id);
+  app.innerHTML = `<a href="#/">← All courses</a><h1>${esc(c.title)}</h1><p class="muted">${esc(c.description)}</p>${c.can_manage ? `<p><a class="btn ghost" href="/api/courses/${id}/download">Download all submissions (zip)</a></p>` : ''}
+    ${hw.map(h => slot(h, c.can_manage)).join('') || '<p class="muted">No assignments yet.</p>'}
+    ${c.can_manage ? `<form id="addHw" class="panel"><h3>Add assignment</h3><input name="title" placeholder="Title" required><input name="description" placeholder="Description (optional)"><label class="muted">Deadline (optional)<input type="datetime-local" name="deadline"></label><button>Add assignment</button></form>` : ''}`;
+  app.dataset.course = id;
+}
+
+async function adminPage() {
+  if (!me) {
+    app.innerHTML = `<div class="panel center"><h1>Admin sign-in</h1><p class="muted">Sign in with Google. Student uploads for your courses are saved to your Google Drive.</p><a class="btn" href="/auth/login">Sign in with Google</a></div>`;
+    return;
+  }
+  const cs = (await api('/courses')).filter(c => c.can_manage);
+  const admins = me.isSuper ? await api('/admins') : [];
+  app.innerHTML = `<div class="row"><h1>Admin</h1><span class="muted">${esc(me.email)}, Google Drive connected</span><a class="btn ghost" href="/auth/logout">Sign out</a></div>
+    <form id="addCourse" class="panel"><h3>New course</h3><input name="title" placeholder="Course title" required><input name="description" placeholder="Short description"><label class="muted">Colour <input type="color" name="color" value="#4f46e5"></label><button>Create course</button></form>
+    <h3>Courses you manage</h3>
+    <ul class="list">${cs.map(c => `<li><a href="#/course/${c.id}">${esc(c.title)}</a><button class="link" data-delcourse="${c.id}">Delete</button></li>`).join('') || '<li class="muted">None yet</li>'}</ul>
+    ${me.isSuper ? `<h3>Admins</h3>
+      <ul class="list">${admins.map(a => `<li><span>${esc(a.email)} ${a.drive ? '' : '<small class="muted">(has not signed in yet)</small>'}</span>${a.email === me.email ? '' : `<button class="link" data-deladmin="${esc(a.email)}">Remove</button>`}</li>`).join('')}</ul>
+      <form id="addAdmin"><input type="email" name="email" placeholder="New admin's Google email" required><button>Add admin</button></form>` : ''}`;
+}
+
+app.addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = e.target, data = Object.fromEntries(new FormData(f));
+  try {
+    if (f.classList.contains('up')) {
+      const s = f.closest('.slot'), m = s.querySelector('.msg'), b = f.querySelector('button');
+      b.disabled = true; m.className = 'msg'; m.textContent = 'Uploading…';
+      try { await api(`/homework/${s.dataset.id}/upload`, { method: 'POST', body: new FormData(f) }); m.textContent = 'Uploaded. Your teacher can now see it.'; f.reset(); }
+      catch (err) { m.className = 'msg err'; m.textContent = err.message; }
+      b.disabled = false; return;
+    }
+    if (f.id === 'addHw') {
+      if (data.deadline) data.deadline = new Date(data.deadline).toISOString();
+      await api(`/courses/${app.dataset.course}/homework`, { method: 'POST', body: data }); coursePage(app.dataset.course);
+    }
+    if (f.id === 'addCourse') { await api('/courses', { method: 'POST', body: data }); adminPage(); }
+    if (f.id === 'addAdmin') { await api('/admins', { method: 'POST', body: data }); adminPage(); }
+  } catch (err) { alert(err.message); }
+});
+
+app.addEventListener('click', async e => {
+  const t = e.target, s = t.closest('.slot');
+  try {
+    if (t.classList.contains('subs')) {
+      const rows = await api(`/homework/${s.dataset.id}/submissions`);
+      s.querySelector('.subList').innerHTML = rows.map(r => `<li><a href="https://drive.google.com/file/d/${esc(r.drive_file_id)}/view" target="_blank" rel="noopener">${esc(r.file_name)}</a><span class="muted">${esc(r.student_email || '')} ${esc(r.created_at)} UTC</span></li>`).join('') || '<li class="muted">No submissions yet.</li>';
+    }
+    if (t.classList.contains('delhw') && confirm('Delete this assignment? Files stay in Drive.')) { await api('/homework/' + s.dataset.id, { method: 'DELETE' }); coursePage(app.dataset.course); }
+    if (t.dataset.delcourse && confirm('Delete this course and its assignments? Files stay in Drive.')) { await api('/courses/' + t.dataset.delcourse, { method: 'DELETE' }); adminPage(); }
+    if (t.dataset.deladmin && confirm('Remove this admin?')) { await api('/admins/' + encodeURIComponent(t.dataset.deladmin), { method: 'DELETE' }); adminPage(); }
+  } catch (err) { alert(err.message); }
+});
+
+route();
+</script>
+</body>
+</html>
