@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Homework Portal</title>
+<link rel="icon" href="/logo.svg" type="image/svg+xml">
 <style>
 :root{--bg:#f6f7f9;--fg:#1c1f26;--muted:#6b7280;--card:#fff;--line:#e3e6eb;--accent:#4f46e5;--bad:#b42318;--ok:#067647}
 @media(prefers-color-scheme:dark){:root{--bg:#14161a;--fg:#eceef2;--muted:#9aa1ae;--card:#1d2026;--line:#2d313a;--accent:#8b85ff;--bad:#ff8a80;--ok:#5ad19a}}
@@ -13,6 +14,7 @@ header{display:flex;justify-content:space-between;align-items:center;padding:14p
 header a{color:var(--fg);text-decoration:none;font-weight:600}
 main{max-width:980px;margin:0 auto;padding:24px}
 h1{font-size:1.8rem;margin:.4em 0}
+.brand{display:flex;align-items:center;gap:10px}
 nav{display:flex;gap:16px;align-items:center}
 .muted{color:var(--muted)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:18px}
@@ -45,7 +47,7 @@ input:focus-visible,button:focus-visible,a:focus-visible{outline:2px solid var(-
 </style>
 </head>
 <body>
-<header><a href="#/">Homework Portal</a><nav><span id="who" class="muted"></span><a href="#/admin">Admin</a></nav></header>
+<header><a href="#/" class="brand"><img src="/logo.svg" alt="" width="26" height="26">Homework Portal</a><nav><span id="who" class="muted"></span><a href="#/admin">Admin</a></nav></header>
 <main id="app">Loading…</main>
 <script>
 const app = document.getElementById('app');
@@ -112,9 +114,16 @@ async function adminPage() {
     <ul class="list">${cs.map(c => `<li><a href="#/course/${c.id}">${esc(c.title)}</a><button class="link" data-delcourse="${c.id}">Delete</button></li>`).join('') || '<li class="muted">None yet</li>'}</ul>
     ${me.isSuper ? `<h3>Admins</h3>
       <ul class="list">${admins.map(a => `<li><span>${esc(a.email)} ${a.drive ? '' : '<small class="muted">(has not signed in yet)</small>'}</span>${a.email === me.email ? '' : `<button class="link" data-deladmin="${esc(a.email)}">Remove</button>`}</li>`).join('')}</ul>
-      <form id="addAdmin"><input type="email" name="email" placeholder="New admin's Google email" required><button>Add admin</button></form>` : ''}`;
+      <form id="addAdmin"><input type="email" name="email" placeholder="New admin's Google email" required><button>Add admin</button></form>
+      <h3>Database backup</h3><div class="panel"><p class="muted" id="bk">Checking…</p><div class="row"><button id="bkNow">Back up now</button><button id="bkTok" class="ghost btn">Show token for hosting</button></div><p class="muted">Keep this token secret. Paste it into your host as BACKUP_REFRESH_TOKEN.</p><input id="bkOut" readonly hidden></div>` : ''}`;
+  if (me.isSuper) showBackup(await api('/backup'));
 }
 
+function showBackup(b) {
+  document.getElementById('bk').textContent = !b.enabled ? 'Not active yet. Sign in as a super admin first.'
+    : (b.last ? 'Last backup to Google Drive: ' + new Date(b.last).toLocaleString() : 'No backup made in this session yet.')
+      + (b.error ? ' Last error: ' + b.error : '') + (b.tokenInEnv ? ' (using BACKUP_REFRESH_TOKEN)' : '');
+}
 app.addEventListener('submit', async e => {
   e.preventDefault();
   const f = e.target, data = Object.fromEntries(new FormData(f));
@@ -138,6 +147,8 @@ app.addEventListener('submit', async e => {
 app.addEventListener('click', async e => {
   const t = e.target, s = t.closest('.slot');
   try {
+    if (t.id === 'bkNow') { t.disabled = true; showBackup(await api('/backup/now', { method: 'POST' })); t.disabled = false; }
+    if (t.id === 'bkTok') { const o = document.getElementById('bkOut'); o.value = (await api('/backup/token')).token || 'Sign out and sign in again to create a token.'; o.hidden = false; o.select(); }
     if (t.classList.contains('subs')) {
       const rows = await api(`/homework/${s.dataset.id}/submissions`);
       s.querySelector('.subList').innerHTML = rows.map(r => `<li><a href="https://drive.google.com/file/d/${esc(r.drive_file_id)}/view" target="_blank" rel="noopener">${esc(r.file_name)}</a><span class="muted">${esc(r.student_email || '')} ${esc(r.created_at)} UTC</span></li>`).join('') || '<li class="muted">No submissions yet.</li>';

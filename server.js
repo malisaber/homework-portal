@@ -45,10 +45,43 @@ async function makeFolder(drive, name, parent) {
 }
 const clean = s => String(s).replace(/[^\p{L}\p{N}._\- ]/gu, '_').trim().slice(0, 100) || 'untitled';
 
+// ---------- Drive backup of the database ----------
+const BACKUP_NAME = 'homework-portal-backup.db';
+let backupTimer = null, backupBusy = false, backupFileId = null, lastBackup = null, lastError = null;
+function backupClient() {
+  let rt = process.env.BACKUP_REFRESH_TOKEN;
+  if (!rt) { const r = db.prepare('SELECT refresh_token FROM admins WHERE is_super=1 AND refresh_token IS NOT NULL LIMIT 1').get(); rt = r && r.refresh_token; }
+  if (!rt) return null;
+  const c = oauth(); c.setCredentials({ refresh_token: rt });
+  return google.drive({ version: 'v3', auth: c });
+}
+async function runBackup() {
+  if (backupBusy) return scheduleBackup();
+  const drive = backupClient(); if (!drive) return;
+  backupBusy = true; const tmp = path.join(os.tmpdir(), 'hp-backup-' + process.pid + '.db');
+  try {
+    await db.backup(tmp);
+    const media = { body: fs.createReadStream(tmp) };
+    if (!backupFileId) {
+      const l = await drive.files.list({ q: `name='${BACKUP_NAME}' and trashed=false`, orderBy: 'modifiedTime desc', fields: 'files(id)' });
+      backupFileId = l.data.files[0] ? l.data.files[0].id : null;
+    }
+    if (backupFileId) await drive.files.update({ fileId: backupFileId, media });
+    else backupFileId = (await drive.files.create({ requestBody: { name: BACKUP_NAME }, media, fields: 'id' })).data.id;
+    lastBackup = new Date().toISOString(); lastError = null;
+  } catch (e) { lastError = e.message; backupFileId = null; console.error('Backup failed:', e.message); }
+  finally { backupBusy = false; fs.unlink(tmp, () => {}); }
+}
+function scheduleBackup() { clearTimeout(backupTimer); backupTimer = setTimeout(runBackup, 5000); }
+
 // ---------- App ----------
 const app = express();
 app.set('trust proxy', 1);
 app.use(express.json());
+app.use('/api', (req, res, next) => { // back up after every successful change
+  if (req.method !== 'GET') res.on('finish', () => { if (res.statusCode < 400) scheduleBackup(); });
+  next();
+});
 app.use(session({
   secret: SESSION_SECRET || 'dev-secret', resave: false, saveUninitialized: false,
   cookie: { httpOnly: true, sameSite: 'lax', secure: BASE_URL.startsWith('https'), maxAge: 7 * 864e5 }
@@ -84,7 +117,10 @@ app.get('/auth/callback', async (req, res) => {
     }
     if (!db.prepare('SELECT 1 FROM admins WHERE email=?').get(email))
       return res.status(403).send('This Google account is not an admin. <a href="/">Back</a>');
+    if (!String(tokens.scope || '').includes('auth/drive.file'))
+      return res.status(403).send('Google Drive permission was not granted. On the Google screen, tick the box that allows access to Drive files, then continue. <a href="/auth/login">Try again</a>');
     if (tokens.refresh_token) db.prepare('UPDATE admins SET refresh_token=? WHERE email=?').run(tokens.refresh_token, email);
+    scheduleBackup();
     req.session.email = email; res.redirect('/#/admin');
   } catch (e) { res.status(500).send('Sign-in failed. <a href="/">Back</a>'); }
 });
@@ -156,6 +192,15 @@ app.delete('/api/admins/:email', needSuper, (req, res) => {
   db.prepare('DELETE FROM admins WHERE email=?').run(req.params.email.toLowerCase()); res.json({ ok: true });
 });
 
+// ---------- Super admin: backup status ----------
+const backupStatus = () => ({ enabled: !!backupClient(), last: lastBackup, error: lastError, tokenInEnv: !!process.env.BACKUP_REFRESH_TOKEN });
+app.get('/api/backup', needSuper, (req, res) => res.json(backupStatus()));
+app.post('/api/backup/now', needSuper, wrap(async (req, res) => { await runBackup(); res.json(backupStatus()); }));
+app.get('/api/backup/token', needSuper, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ token: req.admin.refresh_token || null });
+});
+
 // ---------- Admin: download submissions as zip ----------
 async function sendZip(res, zipName, groups, ownerEmail) {
   const drive = driveFor(ownerEmail);
@@ -219,3 +264,4 @@ app.post('/api/homework/:id/upload', limiter, (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => console.log(`Running at ${BASE_URL}`));
+setTimeout(runBackup, 10000);
